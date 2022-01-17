@@ -1,0 +1,265 @@
+#This just imports the various libraries that you need for this analysis
+import numpy as np
+import pandas as pd
+from collections import namedtuple
+import glob, os
+import scipy
+import matplotlib.pyplot as plt
+import matplotlib
+from datetime import datetime
+from statistics import mean
+import pyCompare
+from datetime import date
+import datetime
+
+#You can set your threshold for hypo as anything you like and it will adjust the analysis accordingly
+THRESHOLD = 3.5
+
+#This is where it will grab your SMBG files from. You can change the file path below. The files must be named
+# Contour and then a number. This number must correspond with the number for the same patient's CGM file number. 
+#The SMBG files must have 2 columns named "Readings [mmol/L]" and "Date and Time". The Date and Time must be in the format
+# DD/MM/YYYY HH:MM
+
+allSMBG = glob.glob(r"C:\Users\files\Contour*.csv")
+
+#This is where it will grab your CGM files from. You can change the file path below. The files must be named
+# HypoTime and then a number. This number must correspond with the number for the same patient's SMBG file number. 
+#The CGM files must have 2 columns named "Timestamp (YYYY-MM-DDThh:mm:ss)" and "Glucose Value (mmol/L)". 
+#The Date and Time must be in the format YYYY-MM-DDTHH:MM:SS
+
+allCGMfiles = glob.glob(r"C:\Users\files\HypoTime*.csv")
+
+#This then sorts your SMBG files
+def make_SMBG_dataframes(files):
+    col_list = ['Date and Time', 'Readings [mmol/L]']
+    li = []
+    for filename in files:
+        data = pd.read_csv(filename, usecols = col_list).assign(ptID=os.path.basename(filename))
+    
+        data['Readings [mmol/L]'] = pd.to_numeric(data['Readings [mmol/L]'], errors = 'coerce')
+                
+        data = data.fillna(0.5)
+    
+        li.append(data)
+
+    DF = pd.concat(li, axis=0, ignore_index=True)
+
+    # this line renames the columns
+    DF = DF.rename(columns = {"Readings [mmol/L]" : "Glucose", "Date and Time" : "Timestamp"})
+    # this then converts the timestamp values to actual date and time data
+    DF['Timestamp'] = pd.to_datetime(DF['Timestamp'], dayfirst = True)
+
+    DF['datetime'] = pd.to_datetime(DF['Timestamp'])
+    DF = DF.set_index('datetime')
+    
+    DF['ptID'] = DF['ptID'].str.rstrip(').csv')
+
+    DF['ptID'] = DF['ptID'].str.lstrip('Contour')
+    DF['ptID'] = DF['ptID'].str.lstrip('()')
+    
+    return DF
+
+all_SMBG_DF = make_SMBG_dataframes(allSMBG)
+
+def is_hypo(value):
+  return value < THRESHOLD
+
+#This creates a dataframe with all the CGM files
+
+def make_dataframes(files):
+    col_list = ['Timestamp (YYYY-MM-DDThh:mm:ss)', 'Glucose Value (mmol/L)']
+    li = []
+    for filename in files:
+        data = pd.read_csv(filename, usecols = col_list).assign(ptID=os.path.basename(filename))
+    
+        data['Glucose Value (mmol/L)'] = pd.to_numeric(data['Glucose Value (mmol/L)'], errors = 'coerce')
+        data = data.fillna(2.1)
+    
+        if is_hypo(data.iloc[-1,1]):
+            data.iloc[-1,1] = 3.5
+    
+        li.append(data)
+
+        DF = pd.concat(li, axis=0, ignore_index=True)
+
+        # this line renames the columns
+        DF = DF.rename(columns = {"Glucose Value (mmol/L)" : "Glucose", "Timestamp (YYYY-MM-DDThh:mm:ss)" : "Timestamp"})
+        # this then converts the timestamp values to actual date and time data
+        DF['Timestamp'] = pd.to_datetime(DF['Timestamp'], yearfirst = True)
+
+        DF['datetime'] = pd.to_datetime(DF['Timestamp'])
+        DF = DF.set_index('datetime')
+        
+        DF['ptID'] = DF['ptID'].str.rstrip('.csv')
+
+        DF['ptID'] = DF['ptID'].str.lstrip('HypoTime')
+    
+    return DF
+
+all_CGM_DF = make_dataframes(allCGMfiles)
+
+all_SMBG_DF['CGM value'] = 0.0
+all_SMBG_DF['CGM time'] = None
+
+#and this then looks at all the SMBG timestamps and finds the closest CGM timestamp and puts it in the SMBG df 
+#along with the corresponding CGM glucose value. This will take a while if you have a lot of values and/or a slow computer. 
+#it takes about a minute for 1000 values on a fairly good laptop. 
+
+
+all_CGM_DF = all_CGM_DF.sort_values(by='Timestamp')
+all_SMBG_DF = all_SMBG_DF.sort_values(by='Timestamp')
+
+def integer_maker(df):
+    for number in range(len(df)):
+            df['ptID'].iloc[number] = int(df['ptID'].iloc[number])
+    return df
+
+all_SMBG_DF = integer_maker(all_SMBG_DF)
+all_CGM_DF = integer_maker(all_CGM_DF)
+
+def correlator(CGMdf, SMBGdf):
+    for line in range(len(SMBGdf)):
+        i = np.argmin(np.abs(CGMdf.index - SMBGdf.Timestamp[line]))
+        SMBGdf['CGM value'][line] = CGMdf['Glucose'].iloc[i]
+        SMBGdf['CGM time'][line] = CGMdf.Timestamp[i]
+    
+    return SMBGdf
+
+
+def correlator2(CGM_df, SMBG_df):
+    li = []
+    pts = CGM_df['ptID'].unique().tolist()
+    for pt in pts:
+        a = correlator(CGM_df[CGM_df['ptID']==pt], SMBG_df[SMBG_df['ptID']==pt])
+        li.append(a)
+    
+    newDF = pd.concat(li)
+    
+    return newDF
+
+all_SMBG_DF = correlator2(all_CGM_DF, all_SMBG_DF)
+
+#This then calculates the difference in minutes between the SMBG and CGM values
+def timediff(df):
+    df['time diff'] = None
+    for line in range(len(df)):
+        df['time diff'][line] = (df['Timestamp'][line] - df['CGM time'][line]) / np.timedelta64(1, 'm')
+
+    return df
+
+all_SMBG_DF = timediff(all_SMBG_DF)
+
+
+#This then drops all the columns where the time difference between the two is > however many mins
+c_all_SMBG_DF = all_SMBG_DF[all_SMBG_DF['time diff'] < 5]
+c_all_SMBG_DF = c_all_SMBG_DF[c_all_SMBG_DF['time diff'] > -5]
+
+#Try not to alter and run this bit of code when fiddling with the bottom bit as it is the slow bit and will take a while. 
+#IGNORE the errors that say A value is trying to be set on a copy of a slice from a DataFrame.
+# These are warnings and won't stop it running or doing it properly. 
+
+def hypo_error_grid(df, title_string):
+    #This separates the df into false negs and not and then later plots the false negs as crosses instead of dots
+    #don't have to do this but it adds another dimension
+    df_false_neg = df[(df['CGM value']>=3.5) & (df['Glucose']<3.5)]
+        
+    false_neg = (len(df_false_neg)/len(df))*100
+    false_neg = "%.1f" % false_neg
+   
+    def colour_in(df):
+        df1 = df.copy()
+        df1['colour'] = 'green'
+        for line in range(len(df1)):
+            if df1['CGM value'].iloc[line] >= (df1['Glucose'].iloc[line]):
+                if df1['CGM value'].iloc[line]<1.9:
+                    pass
+                if df1['CGM value'].iloc[line]>=2.0 and df1['CGM value'].iloc[line]<2.9:
+                    df1['colour'][line] = 'yellow'
+                if df1['CGM value'].iloc[line]>=2.9:
+                    df1['colour'][line] = 'orange'
+                if df1['CGM value'].iloc[line] >=3.8 and df1['Glucose'].iloc[line] <2.5:
+                    df1['colour'][line] = 'red'
+                if df1['Glucose'].iloc[line]>3.4:
+                    df1['colour'][line] = 'green'
+
+            if df1['CGM value'].iloc[line] < (df1['Glucose'].iloc[line]*1.875)-4.6:
+                if df1['CGM value'].iloc[line] > 2.9 or df1['Glucose'].iloc[line] < 3.2:
+                    df1['colour'][line] = 'green'
+                else:
+                    df1['colour'][line] = 'yellow'
+                    
+        return df1
+    
+    df1 = colour_in(df1)
+    df_false_neg = colour_in(df_false_neg)
+            
+        
+
+    #This works out the percent of values in each area.
+    A = len(df1[df1['colour']=='green']) + len(df_false_neg[df_false_neg['colour']=='green'])
+    B = len(df1[df1['colour']=='yellow']) + len(df_false_neg[df_false_neg['colour']=='yellow'])
+    C = len(df1[df1['colour']=='orange']) + len(df_false_neg[df_false_neg['colour']=='orange'])
+    D = len(df1[df1['colour']=='red']) + len(df_false_neg[df_false_neg['colour']=='red'])
+    percentA = (A/(len(df1)+len(df_false_neg)))*100
+    percentB = (B/(len(df1)+len(df_false_neg)))*100
+    percentC = (C/(len(df1)+len(df_false_neg)))*100
+    percentD = (D/(len(df1)+len(df_false_neg)))*100
+    percentA = "%.1f" % percentA
+    percentB = "%.1f" % percentB
+    percentC = "%.1f" % percentC
+    percentD = "%.1f" % percentD
+    #Clear plot
+    plt.clf()
+
+    #Set up plot
+    
+    colors = {'red':'red', 'green':'green', 'orange':'orange', 'yellow':'yellow'}
+    
+    
+    plt.figure(figsize=(8, 8), dpi=80)
+    plt.scatter(df1['Glucose'], df1['CGM value'], marker='o', c=df1['colour'].map(colors), s=25)
+    plt.scatter(df_false_neg['Glucose'], df_false_neg['CGM value'], marker='x', c=df_false_neg['colour'].map(colors), s=25, 
+                label = f'false negative ({false_neg}%)')
+    plt.title("SMBG vs CGM Hypoglycaemia Error Grid")
+    plt.xlabel("SMBG (mmol/L)")
+    plt.ylabel("CGM (mmol/L)")
+    plt.xticks([0,1,2,3,4,5,6,7,8,9,10,11,12])
+    plt.yticks([0,1,2,3,4,5,6,7,8,9,10,11,12])
+    plt.gca().set_facecolor('white')
+
+    #Set axes lengths
+    plt.gca().set_xlim([0, 12])
+    plt.gca().set_ylim([0, 12])
+    plt.gca().set_aspect((12)/(12))
+
+    #Plot zone lines
+    #plt.plot([3.5,3.5,0],[15,3.5,3.5], 'k:', c = 'red')
+    plt.plot([0,12], [0,12], ':', c='black')
+    plt.plot([0, 1.9], [1.9, 1.9], '-', c='black')
+    plt.plot([1.9, 3.5], [1.9, 3.5], '-', c='black')
+    plt.plot([2.5, 2.5], [3.8, 12],'-', c='black')
+    plt.plot([3.4, 3.4], [3.4, 12],'-', c='black')
+    plt.plot([0, 2.9], [2.9,2.9], '-', c='black')
+    plt.plot([0, 2.5], [3.8,3.8], '-', c='black')
+    plt.plot([3.2, 3.2], [0, 1.4], '-', c='black')
+    plt.plot([4, 12], [2.9, 2.9], '-', c='black')
+    plt.plot([3.2, 4.0], [1.4, 2.9], '-', c='black')
+
+    #Add zone titles
+ 
+    
+    plt.text(1.1, 0.7, f"A \n ({percentA}%)".center(24), fontsize=12)
+    plt.text(0.3, 2.15, f"B \n ({percentB}%)".center(24), fontsize=12)
+    plt.text(6, 1.1, f"B \n ({percentB}%)".center(24), fontsize=12)
+    plt.text(0.5, 3.05, f"C \n ({percentC}%)".center(20), fontsize=12)
+    plt.text(0.7, 7, f"D \n ({percentD}%)".center(20), fontsize=12)
+    plt.legend()
+    #plt.grid()
+    
+    # Remove the hashtag from infront of plt.savefig if you want to save the figure. You will need to insert an appropriate
+    # filepath
+    
+    #plt.savefig(r"C:\Users\files\filename.png", dpi = 300)
+    plt.show()
+
+hypo_error_grid(c_all_SMBG_DF, 'CHI')
