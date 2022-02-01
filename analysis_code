@@ -15,12 +15,13 @@ import datetime
 #You can set your threshold for hypo as anything you like and it will adjust the analysis accordingly
 THRESHOLD = 3.5
 
-#This is where it will grab your SMBG files from. You can change the file path below. The files must be named
-# Contour and then a number. This number must correspond with the number for the same patient's CGM file number. 
-#The SMBG files must have 2 columns named "Readings [mmol/L]" and "Date and Time". The Date and Time must be in the format
+# This is where it will grab your SMBG files from. You can change the file path below. The files must be named
+# Contour and then a number (you could change this). 
+# This number must correspond with the number for the same patient's CGM file number. 
+# The SMBG files must have 2 columns named "Readings [mmol/L]" and "Date and Time". The Date and Time must be in the format
 # DD/MM/YYYY HH:MM
 
-allSMBG = glob.glob(r"C:\Users\files\Contour*.csv")
+allSMBG = glob.glob(r"r"C:\Users\files\Contour*.csv")
 
 #This is where it will grab your CGM files from. You can change the file path below. The files must be named
 # HypoTime and then a number. This number must correspond with the number for the same patient's SMBG file number. 
@@ -37,7 +38,7 @@ def make_SMBG_dataframes(files):
         data = pd.read_csv(filename, usecols = col_list).assign(ptID=os.path.basename(filename))
     
         data['Readings [mmol/L]'] = pd.to_numeric(data['Readings [mmol/L]'], errors = 'coerce')
-                
+             
         data = data.fillna(0.5)
     
         li.append(data)
@@ -84,7 +85,9 @@ def make_dataframes(files):
 
         # this line renames the columns
         DF = DF.rename(columns = {"Glucose Value (mmol/L)" : "Glucose", "Timestamp (YYYY-MM-DDThh:mm:ss)" : "Timestamp"})
-        # this then converts the timestamp values to actual date and time data
+        # this then converts the timestamp values to actual date and time data. If you have downloaded data from 
+        # Clarity then the year will be first and this line will work. If, in fact, day is first then change this to 
+        # dayfirst = True
         DF['Timestamp'] = pd.to_datetime(DF['Timestamp'], yearfirst = True)
 
         DF['datetime'] = pd.to_datetime(DF['Timestamp'])
@@ -102,20 +105,13 @@ all_SMBG_DF['CGM value'] = 0.0
 all_SMBG_DF['CGM time'] = None
 
 #and this then looks at all the SMBG timestamps and finds the closest CGM timestamp and puts it in the SMBG df 
-#along with the corresponding CGM glucose value. This will take a while if you have a lot of values and/or a slow computer. 
-#it takes about a minute for 1000 values on a fairly good laptop. 
+#along with the corresponding CGM glucose value. 
 
 
 all_CGM_DF = all_CGM_DF.sort_values(by='Timestamp')
 all_SMBG_DF = all_SMBG_DF.sort_values(by='Timestamp')
 
-def integer_maker(df):
-    for number in range(len(df)):
-            df['ptID'].iloc[number] = int(df['ptID'].iloc[number])
-    return df
-
-all_SMBG_DF = integer_maker(all_SMBG_DF)
-all_CGM_DF = integer_maker(all_CGM_DF)
+IDnumbers = all_CGM_DF['ptID'].unique()
 
 def correlator(CGMdf, SMBGdf):
     for line in range(len(SMBGdf)):
@@ -128,8 +124,7 @@ def correlator(CGMdf, SMBGdf):
 
 def correlator2(CGM_df, SMBG_df):
     li = []
-    pts = CGM_df['ptID'].unique().tolist()
-    for pt in pts:
+    for pt in IDnumbers:
         a = correlator(CGM_df[CGM_df['ptID']==pt], SMBG_df[SMBG_df['ptID']==pt])
         li.append(a)
     
@@ -154,15 +149,16 @@ all_SMBG_DF = timediff(all_SMBG_DF)
 c_all_SMBG_DF = all_SMBG_DF[all_SMBG_DF['time diff'] < 5]
 c_all_SMBG_DF = c_all_SMBG_DF[c_all_SMBG_DF['time diff'] > -5]
 
-#Try not to alter and run this bit of code when fiddling with the bottom bit as it is the slow bit and will take a while. 
-#IGNORE the errors that say A value is trying to be set on a copy of a slice from a DataFrame.
+# IGNORE the errors that say A value is trying to be set on a copy of a slice from a DataFrame.
 # These are warnings and won't stop it running or doing it properly. 
 
-def hypo_error_grid(df, title_string):
+def hypo_error_grid(df):
     #This separates the df into false negs and not and then later plots the false negs as crosses instead of dots
     #don't have to do this but it adds another dimension
     df_false_neg = df[(df['CGM value']>=3.5) & (df['Glucose']<3.5)]
-        
+    df1 = df.drop(df[(df['CGM value']>=3.5) & (df['Glucose']<3.5)].index)
+    #df1 = df.copy()
+    
     false_neg = (len(df_false_neg)/len(df))*100
     false_neg = "%.1f" % false_neg
    
@@ -170,12 +166,14 @@ def hypo_error_grid(df, title_string):
         df1 = df.copy()
         df1['colour'] = 'green'
         for line in range(len(df1)):
-            if df1['CGM value'].iloc[line] >= (df1['Glucose'].iloc[line]):
-                if df1['CGM value'].iloc[line]<1.9:
+            if df1['CGM value'].iloc[line] >= (df1['Glucose'].iloc[line]*0.75)+0.875:
+                if df1['CGM value'].iloc[line]<2.0:
                     pass
-                if df1['CGM value'].iloc[line]>=2.0 and df1['CGM value'].iloc[line]<2.9:
+                else:
                     df1['colour'][line] = 'yellow'
-                if df1['CGM value'].iloc[line]>=2.9:
+                if df1['CGM value'].iloc[line]>=3.0 and df1['Glucose'].iloc[line] <2.0:
+                    df1['colour'][line] = 'orange'
+                if df1['CGM value'].iloc[line] >= (df1['Glucose'].iloc[line]*0.6667)+1.6667:
                     df1['colour'][line] = 'orange'
                 if df1['CGM value'].iloc[line] >=3.8 and df1['Glucose'].iloc[line] <2.5:
                     df1['colour'][line] = 'red'
@@ -235,15 +233,16 @@ def hypo_error_grid(df, title_string):
     #Plot zone lines
     #plt.plot([3.5,3.5,0],[15,3.5,3.5], 'k:', c = 'red')
     plt.plot([0,12], [0,12], ':', c='black')
-    plt.plot([0, 1.9], [1.9, 1.9], '-', c='black')
-    plt.plot([1.9, 3.5], [1.9, 3.5], '-', c='black')
+    plt.plot([0, 1.5], [2.0, 2.0], '-', c='black')
+    plt.plot([1.5, 3.5], [2.0, 3.5], '-', c='black')
     plt.plot([2.5, 2.5], [3.8, 12],'-', c='black')
-    plt.plot([3.4, 3.4], [3.4, 12],'-', c='black')
-    plt.plot([0, 2.9], [2.9,2.9], '-', c='black')
+    plt.plot([3.5, 3.5], [3.5, 12],'-', c='black')
+    plt.plot([0, 2.0], [3.0,3.0], '-', c='black')
     plt.plot([0, 2.5], [3.8,3.8], '-', c='black')
     plt.plot([3.2, 3.2], [0, 1.4], '-', c='black')
-    plt.plot([4, 12], [2.9, 2.9], '-', c='black')
-    plt.plot([3.2, 4.0], [1.4, 2.9], '-', c='black')
+    plt.plot([4, 12], [3.0, 3.0], '-', c='black')
+    plt.plot([3.2, 4.0], [1.4, 3.0], '-', c='black')
+    plt.plot([2.0, 3.5], [3.0, 4.0], '-', c='black')
 
     #Add zone titles
  
@@ -262,4 +261,5 @@ def hypo_error_grid(df, title_string):
     #plt.savefig(r"C:\Users\files\filename.png", dpi = 300)
     plt.show()
 
-hypo_error_grid(c_all_SMBG_DF, 'CHI')
+#This then actually runs the function you've created above and displays your new grid with all the plots. 
+hypo_error_grid(c_all_SMBG_DF)
