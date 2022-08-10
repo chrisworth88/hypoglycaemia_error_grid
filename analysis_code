@@ -1,3 +1,8 @@
+#This is the Python code required to create a Hypoglycaemia Error Grid (as per Worth et al, 2022) and plot your data on it. 
+#If you provide the correct format excel files then this will pair CGM and fingerprick values and plot them on the grid for you.
+#Please contact chris.worth@mft.nhs.uk with any queuries about the use of this grid. We would be delighted to help you use it for your own datasets and 
+#validate the one from our paper. 
+
 #This just imports the various libraries that you need for this analysis
 import numpy as np
 import pandas as pd
@@ -12,7 +17,8 @@ import pyCompare
 from datetime import date
 import datetime
 
-#You can set your threshold for hypo as anything you like and it will adjust the analysis accordingly
+#You can set your threshold for hypo as anything you like. It doesn't actually make a huge difference to this analysis but
+# it will alter how the code determines false negatives for hypoglycaemia
 THRESHOLD = 3.5
 
 # This is where it will grab your SMBG files from. You can change the file path below. The files must be named
@@ -21,10 +27,10 @@ THRESHOLD = 3.5
 # The SMBG files must have 2 columns named "Readings [mmol/L]" and "Date and Time". The Date and Time must be in the format
 # DD/MM/YYYY HH:MM
 
-allSMBG = glob.glob(r"r"C:\Users\files\Contour*.csv")
+allSMBG = glob.glob(r"C:\Users\files\Contour*.csv")
 
 #This is where it will grab your CGM files from. You can change the file path below. The files must be named
-# HypoTime and then a number. This number must correspond with the number for the same patient's SMBG file number. 
+#HypoTime and then a number. This number must correspond with the number for the same patient's SMBG file number. 
 #The CGM files must have 2 columns named "Timestamp (YYYY-MM-DDThh:mm:ss)" and "Glucose Value (mmol/L)". 
 #The Date and Time must be in the format YYYY-MM-DDTHH:MM:SS
 
@@ -145,9 +151,18 @@ def timediff(df):
 all_SMBG_DF = timediff(all_SMBG_DF)
 
 
-#This then drops all the columns where the time difference between the two is > however many mins
+#This then drops all the columns where the time difference between the two is > however many mins (set at 5 below but this can be adjusted)
 c_all_SMBG_DF = all_SMBG_DF[all_SMBG_DF['time diff'] < 5]
 c_all_SMBG_DF = c_all_SMBG_DF[c_all_SMBG_DF['time diff'] > -5]
+
+#This then creates a column in your dataframe that specifies if at least one of CGM or SMBG value is <4mmol/L (number can be changed if desired but
+#we recommend 4 as this was the upper limit decided on by expert consensus)
+c_all_SMBG_DF['low'] = False
+for line in range(len(c_all_SMBG_DF)):
+    if c_all_SMBG_DF['Glucose'].iloc[line] <=4:
+        c_all_SMBG_DF['low'].iloc[line] = True
+    if c_all_SMBG_DF['CGM value'].iloc[line] <=4:
+        c_all_SMBG_DF['low'].iloc[line] = True
 
 # IGNORE the errors that say A value is trying to be set on a copy of a slice from a DataFrame.
 # These are warnings and won't stop it running or doing it properly. 
@@ -155,8 +170,8 @@ c_all_SMBG_DF = c_all_SMBG_DF[c_all_SMBG_DF['time diff'] > -5]
 def hypo_error_grid(df):
     #This separates the df into false negs and not and then later plots the false negs as crosses instead of dots
     #don't have to do this but it adds another dimension
-    df_false_neg = df[(df['CGM value']>=3.5) & (df['Glucose']<3.5)]
-    df1 = df.drop(df[(df['CGM value']>=3.5) & (df['Glucose']<3.5)].index)
+    df_false_neg = df[(df['CGM value']>=THRESHOLD) & (df['Glucose']<THRESHOLD)]
+    df1 = df.drop(df[(df['CGM value']>=THRESHOLD) & (df['Glucose']<THRESHOLD)].index)
     #df1 = df.copy()
     
     false_neg = (len(df_false_neg)/len(df))*100
@@ -170,21 +185,21 @@ def hypo_error_grid(df):
                 if df1['CGM value'].iloc[line]<2.0:
                     pass
                 else:
-                    df1['colour'][line] = 'yellow'
+                    df1['colour'][line] = 'orange'
                 if df1['CGM value'].iloc[line]>=3.0 and df1['Glucose'].iloc[line] <2.0:
-                    df1['colour'][line] = 'orange'
-                if df1['CGM value'].iloc[line] >= (df1['Glucose'].iloc[line]*0.6667)+1.6667:
-                    df1['colour'][line] = 'orange'
-                if df1['CGM value'].iloc[line] >=3.8 and df1['Glucose'].iloc[line] <2.5:
                     df1['colour'][line] = 'red'
-                if df1['Glucose'].iloc[line]>3.4:
+                if df1['CGM value'].iloc[line] >= (df1['Glucose'].iloc[line]*0.6667)+1.6667:
+                    df1['colour'][line] = 'red'
+                if df1['CGM value'].iloc[line] >=3.8 and df1['Glucose'].iloc[line] <2.5:
+                    df1['colour'][line] = 'purple'
+                if df1['Glucose'].iloc[line]>3.5:
                     df1['colour'][line] = 'green'
 
             if df1['CGM value'].iloc[line] < (df1['Glucose'].iloc[line]*1.875)-4.6:
-                if df1['CGM value'].iloc[line] > 2.9 or df1['Glucose'].iloc[line] < 3.2:
+                if df1['CGM value'].iloc[line] > 3.0 or df1['Glucose'].iloc[line] < 3.2:
                     df1['colour'][line] = 'green'
                 else:
-                    df1['colour'][line] = 'yellow'
+                    df1['colour'][line] = 'orange'
                     
         return df1
     
@@ -195,9 +210,9 @@ def hypo_error_grid(df):
 
     #This works out the percent of values in each area.
     A = len(df1[df1['colour']=='green']) + len(df_false_neg[df_false_neg['colour']=='green'])
-    B = len(df1[df1['colour']=='yellow']) + len(df_false_neg[df_false_neg['colour']=='yellow'])
-    C = len(df1[df1['colour']=='orange']) + len(df_false_neg[df_false_neg['colour']=='orange'])
-    D = len(df1[df1['colour']=='red']) + len(df_false_neg[df_false_neg['colour']=='red'])
+    B = len(df1[df1['colour']=='yellow']) + len(df_false_neg[df_false_neg['colour']=='orange'])
+    C = len(df1[df1['colour']=='orange']) + len(df_false_neg[df_false_neg['colour']=='red'])
+    D = len(df1[df1['colour']=='red']) + len(df_false_neg[df_false_neg['colour']=='purple'])
     percentA = (A/(len(df1)+len(df_false_neg)))*100
     percentB = (B/(len(df1)+len(df_false_neg)))*100
     percentC = (C/(len(df1)+len(df_false_neg)))*100
@@ -211,7 +226,7 @@ def hypo_error_grid(df):
 
     #Set up plot
     
-    colors = {'red':'red', 'green':'green', 'orange':'orange', 'yellow':'yellow'}
+    colors = {'red':'red', 'green':'green', 'orange':'orange', 'purple':'purple'}
     
     
     plt.figure(figsize=(8, 8), dpi=80)
@@ -263,3 +278,9 @@ def hypo_error_grid(df):
 
 #This then actually runs the function you've created above and displays your new grid with all the plots. 
 hypo_error_grid(c_all_SMBG_DF)
+
+#If you would like to run the plot with a dataset restricted to pairs where at least one is <4mmol/L (RECOMMENDED) to gain insight
+#into a more practical analysis of CGM accuracy for this patient group then add a hashtag infront of line 265 and remove the one
+#from the line below to run that instead. Alternatively you could run both. 
+
+#hypo_error_grid(c_all_SMBG_DF[c_all_SMBG_DF['low']==True])
